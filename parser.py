@@ -24,21 +24,26 @@ class ParseError(Exception):
         self.token = token
 
 class Parser:
-    # operator precedence map (higher number = higher precedence)
+    # binary operator precedence (higher number = binds tighter). Unary
+    # operators live in their own table: '&', '*', '+' and '-' are both, and
+    # one shared dict let the unary entries overwrite the binary ones (so
+    # `a + b * c` parsed as `(a + b) * c`).
+    ASSIGN_OPS = ('=', '+=', '-=', '*=', '/=', '%=', '<<=', '>>=')
     PRECEDENCE = {
-        '||': 1,
-        '&&': 2,
-        '|': 3,
-        '^': 4,
-        '&': 5,
-        '==': 6, '!=': 6,
-        '<': 7, '>': 7, '<=': 7, '>=': 7,
-        '<<': 8, '>>': 8,
-        '+': 9, '-': 9,
-        '*': 10, '/': 10, '%': 10,
-        # Unary operators have precedence 11
-        '++': 11, '--': 11, '!': 11, '~': 11, '&': 11, '*': 11, '+': 11, '-': 11,
+        **{op: 1 for op in ASSIGN_OPS},     # right-associative, lowest
+        '||': 2,
+        '&&': 3,
+        '|': 4,
+        '^': 5,
+        '&': 6,
+        '==': 7, '!=': 7,
+        '<': 8, '>': 8, '<=': 8, '>=': 8,
+        '<<': 9, '>>': 9,
+        '+': 10, '-': 10,
+        '*': 11, '/': 11, '%': 11,
+        '++': 13, '--': 13,                 # postfix, see led()
     }
+    UNARY_PRECEDENCE = 12
 
     def __init__(self, tokens):
         self.tokens = tokens or []
@@ -98,6 +103,7 @@ class Parser:
     def parse_external(self):
         # handle function or global declaration
         if self.match('KEYWORD') and self.current.value in ('int','float','char','double','void','struct','union'):
+            self._decl_line = self.current.line
             ttype = self.current.value
             self.advance()
             # pointer types support
@@ -135,9 +141,25 @@ class Parser:
             self.advance()
             return None
 
+    def _skip_array_suffix(self):
+        """Consume `[...]` after a declarator; return the size text ('' for `[]`)."""
+        size = []
+        self.advance()  # '['
+        while self.current and not self.match('DELIMITER', ']'):
+            size.append(self.current.value)
+            self.advance()
+        if self.match('DELIMITER', ']'):
+            self.advance()
+        return ''.join(size)
+
     def parse_declaration_rest(self, type_, first_ident):
-        node = ASTNode('Declaration', value=type_)
-        node.add_child(ASTNode('Identifier', value=first_ident))
+        line = getattr(self, '_decl_line', 0)
+        node = ASTNode('Declaration', value=type_, line=line)
+        ident = ASTNode('Identifier', value=first_ident, line=line)
+        if self.match('DELIMITER', '['):
+            # arrays: `char msg[] = "..."`, `int a[10];`
+            node.value = f"{type_}[{self._skip_array_suffix()}]"
+        node.add_child(ident)
         if self.match('OPERATOR','='):
             self.advance()
             node.add_child(ASTNode('Initializer').add_child(self.parse_expression()))
@@ -150,7 +172,7 @@ class Parser:
         return node
 
     def parse_function(self, ret_type, name):
-        node = ASTNode('Function', value=f"{ret_type} {name}")
+        node = ASTNode('Function', value=f"{ret_type} {name}", line=getattr(self, '_decl_line', 0))
         # consume '('
         if self.match('DELIMITER','('):
             self.advance()
@@ -200,6 +222,7 @@ class Parser:
         if not self.current:
             return None
         if self.match('KEYWORD') and self.current.value in ('int','float','char','double','void'):
+            self._decl_line = self.current.line
             t = self.current.value; self.advance()
             if self.match('IDENTIFIER'):
                 name = self.current.value; self.advance()
@@ -227,7 +250,7 @@ class Parser:
         return expr
 
     def parse_if(self):
-        node = ASTNode('If')
+        node = ASTNode('If', line=self.current.line)
         self.advance()
         if self.match('DELIMITER','('):
             self.advance()
@@ -242,7 +265,7 @@ class Parser:
         return node
 
     def parse_while(self):
-        node = ASTNode('While')
+        node = ASTNode('While', line=self.current.line)
         self.advance()
         if self.match('DELIMITER','('):
             self.advance()
@@ -253,7 +276,7 @@ class Parser:
         return node
 
     def parse_for(self):
-        node = ASTNode('For')
+        node = ASTNode('For', line=self.current.line)
         self.advance()
         if self.match('DELIMITER','('):
             self.advance()
@@ -278,7 +301,7 @@ class Parser:
         return node
 
     def parse_return(self):
-        node = ASTNode('Return')
+        node = ASTNode('Return', line=self.current.line)
         self.advance()
         if not self.match('DELIMITER',';'):
             node.add_child(self.parse_expression())
@@ -304,7 +327,7 @@ class Parser:
             # function call or identifier
             if self.current and self.current.type == 'DELIMITER' and self.current.value == '(':
                 self.advance()  # consume '('
-                call = ASTNode('Call', value=token.value)
+                call = ASTNode('Call', value=token.value, line=token.line)
                 while self.current and not (self.current.type == 'DELIMITER' and self.current.value == ')'):
                     arg = self.parse_expression()
                     if arg:
@@ -322,12 +345,16 @@ class Parser:
             return ASTNode('String', value=token.value, line=token.line)
         if token.type == 'CHAR':
             return ASTNode('Char', value=token.value, line=token.line)
+        if token.type == 'OPERATOR' and token.value in ('++', '--'):
+            un = ASTNode('PrefixOp', value=token.value, line=token.line)
+            un.add_child(self.parse_expression(self.UNARY_PRECEDENCE))
+            return un
         if token.type == 'OPERATOR' and token.value in ('+','-','!','~','&','*'):
             # unary operators (address-of, dereference, etc.)
             # Check if this is truly unary by looking at context
             # For '&' and '*', they're unary when preceding an identifier or expression
-            right = self.parse_expression(self.PRECEDENCE.get(token.value, 11))
-            un = ASTNode('UnaryOp', value=token.value)
+            right = self.parse_expression(self.UNARY_PRECEDENCE)
+            un = ASTNode('UnaryOp', value=token.value, line=token.line)
             un.add_child(right)
             return un
         if token.type == 'DELIMITER' and token.value == '(':
@@ -339,16 +366,20 @@ class Parser:
         return ASTNode('Unknown', value=getattr(token,'value',None), line=getattr(token,'line',0))
     
     def led(self, token, left):
-        # binary operator
+        # postfix ++ / -- take no right operand (`i++` used to swallow the
+        # token after it, e.g. the `)` closing a for-loop header)
+        if token.value in ('++', '--'):
+            node = ASTNode('PostfixOp', value=token.value, line=token.line)
+            node.add_child(left)
+            return node
         prec = self.PRECEDENCE.get(token.value, 0)
-        # For left-associative operators, we use precedence
-        # For right-associative (like '='), we'd use prec-1
-        if token.value == '=':
-            # Assignment is right-associative
+        if token.value in self.ASSIGN_OPS:
+            # assignment is right-associative: a = b = c is a = (b = c)
             right = self.parse_expression(prec - 1)
+            node = ASTNode('Assign', value=token.value, line=token.line)
         else:
             right = self.parse_expression(prec)
-        node = ASTNode('BinaryOp', value=token.value)
+            node = ASTNode('BinaryOp', value=token.value, line=token.line)
         node.add_child(left)
         node.add_child(right)
         return node
