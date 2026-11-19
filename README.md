@@ -1,5 +1,7 @@
  🔬 C Analyzer
 
+[![tests](https://github.com/Sdb002/C-Analyzer/actions/workflows/tests.yml/badge.svg)](https://github.com/Sdb002/C-Analyzer/actions/workflows/tests.yml)
+
 A desktop IDE-like tool for static analysis of C source code. Built with Python and PySide6, it parses your C code in real time, visualizes the Abstract Syntax Tree, extracts tokens and symbols, estimates time complexity, and exports a full PDF report — all in a clean dark-themed GUI.
 
 ---
@@ -29,10 +31,25 @@ c-analyzer/
 ├── lexer.py             # Regex-based C lexer
 ├── parser.py            # Pratt parser + recursive descent, produces ASTNode tree
 ├── symbol_table.py      # Scoped symbol table with scope stack
+├── complexity.py        # Big-O estimate from loop nesting (no GUI imports)
 ├── ast_visual_c.py      # AST renderer using Matplotlib
 ├── report_generator.py  # PDF report generator using ReportLab
-└── sample.c             # Sample C file for testing
+├── sample.c             # Sample C file for testing
+└── tests/               # pytest suite: lexer, parser, symbol table, complexity
 ```
+
+---
+
+ 🧪 Tests
+
+The analysis core (lexer, parser, symbol table, complexity estimator) is pure Python and has a pytest suite, run on every push by GitHub Actions on Python 3.10–3.13:
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+The suite covers operator precedence and associativity, assignments, prefix/postfix `++`/`--`, arrays, line numbers on AST nodes, scope resolution, Big-O by loop nesting, and that `sample.c` parses with no unknown nodes.
 
 ---
 
@@ -46,10 +63,7 @@ git clone https://github.com/Sdb002/c-analyzer.git
 cd c-analyzer
 
 # Install dependencies
-pip install PySide6 matplotlib reportlab pillow
-
-# Optional (recommended)
-pip install psutil pygments
+pip install -r requirements.txt
 ```
 
 | Package | Purpose |
