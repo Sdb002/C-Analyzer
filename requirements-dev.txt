@@ -1,0 +1,3 @@
+# the lexer, parser, symbol table and complexity estimator are pure Python:
+# the tests need nothing else
+pytest>=7
