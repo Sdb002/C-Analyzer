@@ -1,0 +1,7 @@
+PySide6
+matplotlib
+reportlab
+pillow
+# optional: memory readout and syntax highlighting
+psutil
+pygments

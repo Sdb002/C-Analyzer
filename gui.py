@@ -33,6 +33,8 @@ except Exception:
     HAVE_PSUTIL = False
 
 # Try to import user modules (non-fatal if missing)
+from complexity import big_o_from_depth, max_loop_depth
+
 try:
     from lexer import Lexer
 except Exception:
@@ -573,33 +575,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ---------------- Complexity estimator (corrected -> Big-O via loop nesting) ----------------
     def _max_loop_depth(self, node, current=0):
-        """Return maximum loop nesting depth rooted at node."""
-        if not node:
-            return current
-        t = getattr(node, 'type', '').lower()
-        depth_here = current + 1 if t in ('for','while','do') else current
-        maxd = depth_here
-        for c in getattr(node, 'children', []) or []:
-            maxd = max(maxd, self._max_loop_depth(c, depth_here))
-        return maxd
+        return max_loop_depth(node, current)
 
     def _big_o_from_depth(self, depth):
-        if depth == 0:
-            return 'O(1)'
-        if depth == 1:
-            return 'O(n)'
-        return f'O(n^{depth})'
-
-    # keep backward-compatible wrapper used earlier
-    def _estimate_complexity_order(self, node):
-        # return an integer depth (0 => constant, 1 => linear, etc.)
-        depth = self._max_loop_depth(node, 0)
-        # translate: depth 0 -> order 1, depth 1 -> order 2 ... but we will use depth directly
-        return depth
-
-    def _order_to_big_o(self, order):
-        # convert depth to human-friendly Big-O (we treat order as depth)
-        return self._big_o_from_depth(order)
+        return big_o_from_depth(depth)
 
     def _update_metrics(self):
         toks = getattr(self, '_last_tokens', []) or []
